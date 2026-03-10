@@ -1,0 +1,98 @@
+TEST REPORT
+===========
+
+Latest Validation Run
+---------------------
+Command run:
+    python -m unittest -v
+
+Observed result:
+    48 tests passed
+    1 opt-in live pipeline test skipped by default
+
+New Regression Coverage Added In This Revision
+----------------------------------------------
+The suite now additionally covers:
+- protocol-safe ordering of assistant tool calls followed immediately by
+  `role=tool` messages
+- `tool_call_id` propagation onto tool result messages when present
+- forced-search fallback reuse of the main request runtime-state budget
+- narrowed web-search fallback heuristics to avoid false positives for offline
+  questions that merely contain words like `current`
+- exact response-byte-limit rejection behavior in `_read_response_with_limit()`
+- thinking-panel reset/hide behavior when rendering a fresh session after a
+  session that contained thinking output
+- `safe_ui_call()` returning False when the Tkinter window is already closing
+- direct single-file session loading without calling `list_sessions()`
+
+Coverage Notes
+--------------
+This validation run included the existing generation/session tests plus the
+web-search integration tests after the protocol-ordering fix, shared fallback
+runtime-state fix, forced-search heuristic narrowing, session-load performance
+fix, and UI thinking-panel reset fix.
+
+The web fetch tests now cover:
+- normal HTML extraction
+- localhost blocking
+- private IP blocking
+- hostname resolution rejection for internal targets
+- oversized response rejection before full-body read
+- exact incremental byte-limit enforcement at the configured cap
+- unsupported content-type rejection
+- domain allowlist enforcement
+- redirect target re-validation
+- per-request fetched-page limit enforcement
+- structured tool error return when the page limit is exceeded
+
+The search/reranker/tooling tests now cover:
+- normalized search result shape
+- deterministic first-pass reranking from query/title/snippet/domain signals
+- optional Ollama reranker-driven result reordering
+- optional sentence-transformers reranker-driven result reordering
+- fallback preservation of first-pass-ranked order when the Ollama reranker fails
+- propagation of reranker config through GenerationJob snapshots
+- execution of both reranking stages inside the Ollama tool path
+- protocol-safe assistant -> tool result sequencing
+- fallback sharing of the same fetched-page runtime budget as the main tool path
+- reduced false-positive forced-search behavior
+
+
+New Live Integration Coverage Added In This Revision
+---------------------------------------------------
+- `tests_web_search_integration.py` now includes an opt-in live SearXNG ->
+  deterministic rerank -> page fetch smoke test.
+- The live test is intentionally skipped unless
+  `LLM_FRONTEND_RUN_LIVE_WEB_PIPELINE_TEST=1` is set.
+- The live test writes a step-by-step trace to stdout and can also write to a
+  file through `LLM_FRONTEND_LIVE_WEB_LOG_PATH`.
+- The live test will try fetches in reranked order until one candidate
+  succeeds, so the logs show both successful fetches and rejected candidates.
+
+
+UI Accessibility/Layout Revision Validation
+===========================================
+
+Revision scope
+--------------
+This package revision adds three UI-layer changes only:
+- Ctrl + mouse-wheel text zoom in text-bearing widgets.
+- Resizable transcript / thinking / input panes.
+- Main-window internet-search toggle synchronized with settings.
+
+Validation performed for this specific revision
+-----------------------------------------------
+- `python -m py_compile ui/main_window.py controllers/chat_controller.py services/config_service.py ui/settings_window.py app.py main.py tests_web_search_integration.py tests_test_generation_job_flow.py`
+- Result: passed
+
+Important accuracy note
+-----------------------
+The previously bundled unit-suite result remains the latest observed full suite
+result for this repository state lineage:
+- `48 tests passed`
+- `1 live pipeline test skipped by default`
+
+I did not rerun the full Tkinter/unit test suite after this final UI-only pass
+inside this container. The packaged report therefore distinguishes the earlier
+full-suite result from the syntax/import validation actually rerun for this UI
+revision.

@@ -1,0 +1,189 @@
+DOCUMENTATION CHANGE LOG
+========================
+
+Revision Scope
+--------------
+This revision was driven by an external adversarial code review. The work was
+performed in priority order from the highest-severity confirmed defects down to
+lower-severity behavioral and documentation issues. The code and documents were
+updated together so the repository text now reflects the current implementation.
+
+Priority-Ordered Code Fix Log
+-----------------------------
+1. HIGH — Ollama tool-call protocol ordering fixed.
+   - File changed: `services/ollama_client.py`
+   - Problem: a system grounding message was being injected between the
+     assistant message containing `tool_calls` and the subsequent `role=tool`
+     messages.
+   - Fix: the grounding message is now inserted before the assistant tool-call
+     message so the final message sequence remains protocol-safe:
+         ... -> system grounding -> assistant(tool_calls) -> tool -> tool
+   - Additional hardening: tool result messages now preserve `tool_call_id`
+     when Ollama supplies one, and also include the tool name.
+
+2. HIGH — Exact response-byte cap enforcement fixed.
+   - File changed: `services/web_fetch_service.py`
+   - Problem: `_read_response_with_limit()` could read one byte beyond the
+     configured maximum.
+   - Fix: the final incremental read now requests at most `remaining` bytes,
+     not `remaining + 1`.
+
+3. HIGH — Forced-search fallback now shares the same request runtime budget.
+   - File changed: `services/ollama_client.py`
+   - Problem: `_maybe_force_web_search_fallback()` created a fresh runtime state
+     and could bypass the main request's fetched-page counter.
+   - Fix: `_chat_with_optional_tools()` now creates one request-scoped runtime
+     state and passes it into both the normal tool path and the forced-search
+     fallback path.
+
+4. MEDIUM — Thinking-panel visibility state now resets on session switch.
+   - File changed: `ui/main_window.py`
+   - Problem: switching from a session with thinking output to a blank session
+     left the checkbox checked and the panel visible even though it had been
+     cleared.
+   - Fix: `render_full_conversation()` now clears the content, resets the
+     checkbox to False, and hides the panel before rendering the target session.
+
+5. MEDIUM — Forced-search heuristic narrowed to explicit web-dependent cases.
+   - File changed: `services/ollama_client.py`
+   - Problem: standalone words such as `current` and `recent` triggered forced
+     SearXNG requests for ordinary offline questions.
+   - Fix: the heuristic now requires either:
+       - an explicit lookup intent such as `search for`, `look up`,
+         `find online`, `check the web`, or
+       - a recency phrase tied to genuinely external/current categories such as
+         news, weather, forecast, prices, scores, standings, releases, or
+         versions.
+
+6. HIGH-CONFIDENCE COMPATIBILITY HARDENING — Tool results now include
+   `tool_call_id` when available.
+   - File changed: `services/ollama_client.py`
+   - Reason: improves pairing reliability for multi-tool follow-up passes.
+
+7. HIGH-CONFIDENCE UI ROBUSTNESS — GPU poll inflight flag no longer gets stuck
+   on failed UI scheduling.
+   - File changed: `ui/main_window.py`
+   - Problem: if the window began closing before `safe_ui_call()` could queue
+     the GPU update callback, `_gpu_poll_inflight` could remain True forever.
+   - Fix: `safe_ui_call()` now returns a success boolean, and
+     `_refresh_gpu_metrics()` clears the inflight flag immediately when the UI
+     callback cannot be queued.
+
+8. MEDIUM-CONFIDENCE PERFORMANCE — Session loading no longer scans every saved
+   session file.
+   - File changed: `services/session_service.py`
+   - Problem: `load_session()` previously called `list_sessions()` and fully
+     deserialized every session file before locating one target ID.
+   - Fix: `load_session()` now performs a direct filename-pattern lookup for the
+     requested session ID and loads only the matching file.
+
+9. MEDIUM-CONFIDENCE UI CLEANUP — Repeated session rendering no longer toggles
+   the thinking panel redundantly for every assistant message.
+   - File changed: `ui/main_window.py`
+   - Fix: added `_ensure_thinking_panel_visible()` so the grid/show operation is
+     only performed when the panel is actually hidden.
+
+10. MEDIUM-CONFIDENCE CONTEXT PRESERVATION — Forced-search fallback now keeps
+    the original assistant draft in history.
+    - File changed: `services/ollama_client.py`
+    - Problem: the fallback previously re-asked the model without preserving the
+      bad initial assistant answer.
+    - Fix: the assistant draft is now appended before the fallback correction
+      instructions, so the second pass is explicitly revising the prior answer.
+
+11. LOW-RISK CORRECTNESS — Auto-title logic no longer overwrites a manually
+    renamed session just because the title begins with `Session `.
+    - File changed: `controllers/chat_controller.py`
+    - Fix: auto-titling now triggers only for the exact generated default title
+      pattern rather than any title with that prefix.
+
+Validation and Test Updates
+---------------------------
+- `tests_web_search_integration.py` now includes new regression coverage for:
+  - protocol-safe tool result ordering
+  - `tool_call_id` propagation
+  - forced-search runtime-state reuse
+  - narrowed forced-search false-positive behavior
+  - exact response-byte-limit enforcement
+- `tests_test_generation_job_flow.py` now includes new regression coverage for:
+  - thinking-panel reset on session switch
+  - `safe_ui_call()` boolean failure signaling
+  - direct single-file session loading
+- Latest observed result:
+    python -m unittest -v
+    47 tests passed
+
+Documentation Corrections Applied
+---------------------------------
+- `README.txt`
+  - updated test count from 41 to 47
+  - corrected the fetch-limit enforcement wording to reflect the shared runtime
+    budget across both normal tool calls and the forced-search fallback
+  - clarified that forced-search fallback is intentionally narrow, not a broad
+    keyword scanner
+  - documented protocol-safe tool result handling and direct session lookup
+- `CODE_DOC_CONFORMANCE_AUDIT.txt`
+  - updated to reflect the adversarial-review-driven revision and the new test
+    total
+  - removed stale claims that implied the previous revision had already caught
+    the protocol-ordering defect
+- `TEST_REPORT.txt`
+  - updated from 41 passing tests to 47 passing tests
+  - listed the newly added regression areas
+- `FILE_LOG.txt`
+  - updated file role descriptions so the changed modules match current behavior
+
+Items Reviewed But Not Expanded Into Large Refactors
+---------------------------------------------------
+A few adversarial-review notes described broader architectural concerns rather
+than one-line defects. This revision addressed the concrete correctness issues
+inside those concerns first:
+- the real GPU-poll failure mode was the stuck inflight flag, which is fixed
+- the real session-scaling problem was O(N) load_session behavior, which is fixed
+- the real fallback inconsistency was budget/accounting and missing prior draft
+  context, both of which are fixed
+
+No attempt was made in this pass to redesign the entire request-cancellation or
+network-abort architecture because the current urllib-based streaming path would
+require a larger controller/service protocol change than the confirmed defect
+fixes above.
+
+
+Follow-Up Revision: Sentence-Transformers Reranker Integration
+-------------------------------------------------------------
+- Added a new optional stage-2 reranker backend driven by the `sentence-transformers` package.
+- Added config fields for reranker backend selection, sentence-transformers model name, and device preference.
+- Updated the settings window so users can clearly choose `disabled`, `ollama`, or `sentence_transformers` and supply the matching model information.
+- Updated README, FILE_LOG, and TEST_REPORT so the documentation reflects the new backend option and the new 48-test baseline.
+
+
+Follow-Up Revision: Live Search/Fetch Pipeline Test
+--------------------------------------------------
+- Revised `tests_web_search_integration.py` so the repository now includes an
+  explicit opt-in live integration test for the real search/fetch pipeline.
+- The new live test runs a real SearXNG query, applies the deterministic stage-1
+  reranker, and then attempts real page fetches in reranked order until one
+  succeeds.
+- Added trace logging to stdout and optional file logging through
+  `LLM_FRONTEND_LIVE_WEB_LOG_PATH` so a reviewer can inspect exactly what the
+  live pipeline did.
+- Updated `README.txt`, `TEST_REPORT.txt`, and `FILE_LOG.txt` to document how
+  the new live test works and why it is opt-in instead of always-on.
+- Latest observed result after this revision:
+      python -m unittest -v
+      48 tests passed
+      1 live pipeline test skipped by default
+
+
+2026-03-08 - Main-window UI accessibility/layout update documentation pass
+-------------------------------------------------------------------------
+- Updated `README.txt` to document the new main-window Ctrl+mouse-wheel text
+  zoom behavior, the resizable pane layout, and the visible Internet Search
+  toggle in the main header.
+- Updated `FILE_LOG.txt` so the `ui/main_window.py` entry reflects the new
+  layout behavior, zoom controls, and direct search-toggle sync path.
+- Updated `TEST_REPORT.txt` to distinguish between the newly validated syntax
+  check for the UI/controller revision and the previously bundled full unit
+  suite result from the last package state.
+- Kept the rest of the search/reranker documentation intact because these UI
+  changes do not alter the retrieval pipeline or model tool protocol.

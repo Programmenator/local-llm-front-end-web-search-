@@ -1,0 +1,354 @@
+CODE-TO-DOCUMENTATION CONFORMANCE AUDIT
+=======================================
+
+Audit Goal
+----------
+Perform a file-by-file code-to-doc conformance review before rewriting the
+documentation. The review standard used here was:
+
+1. Read the current code file.
+2. Compare existing documentation claims against the file's real behavior.
+3. Consult bundled documentation and tests when a behavior boundary needed
+   confirmation.
+4. Run the bundled automated tests to verify behavior that was explicitly
+   covered by the repository test suite.
+5. Rewrite documentation only after the code/document comparison was complete.
+
+Validation Actions Performed
+----------------------------
+- Extracted and reviewed the full repository from the uploaded ZIP.
+- Inspected the source tree file by file.
+- Verified module/function inventory across the Python files.
+- Ran the bundled pytest suite for the two included test modules.
+- Observed result after the latest revision: 48 tests passed, plus 1 opt-in live pipeline test skipped by default.
+
+Command used during validation:
+    python -m unittest -v
+
+High-Level Findings
+-------------------
+1. The internal per-file Python docstrings were generally strong and mostly
+   aligned with current behavior.
+2. The top-level documentation files were improved compared with the prior ZIP
+   but still had factual gaps and some over-broad wording.
+3. The largest factual issue in the README was the dependency section: it named
+   packages such as `requests` even though the current code uses `urllib` and
+   `requirements.txt` currently lists only `beautifulsoup4>=4.12`.
+4. The top-level docs under-described several confirmed UI and runtime features,
+   including:
+   - GPU/VRAM live readout in the main window
+   - token/second meter behavior
+   - session rename/delete/new workflow
+   - exact settings fields present in the settings window
+   - forced-search fallback logic in the Ollama client
+5. The prior documentation change log contained generalized claims but not a
+   defensible file-by-file conformance record. This audit file replaces that gap.
+
+File-by-File Audit Results
+--------------------------
+
+Top-Level Files
+~~~~~~~~~~~~~~~
+`main.py`
+    Status: Conforms.
+    Findings:
+    - Docstring accurately describes the file as the small entry point.
+    - Actual behavior matches: imports app object, runs it, no extra logic.
+
+`app.py`
+    Status: Conforms with one documentation expansion needed at repo level.
+    Findings:
+    - File docstring correctly describes dependency wiring.
+    - Actual object graph confirmed: ConfigService, SessionService,
+      OllamaClient, ChatController, MainWindow.
+    - Top-level docs were updated to mention that bootstrap_state is called here.
+
+`run_local_llm_frontend.sh`
+    Status: Conforms.
+    Findings:
+    - Script doc comments match actual behavior.
+    - It is a shell launcher only. It does not create a desktop shortcut and
+      does not manage a virtual environment automatically.
+
+`requirements.txt`
+    Status: Prior README mismatch; file itself is authoritative.
+    Findings:
+    - Current third-party dependency list contains only `beautifulsoup4>=4.12`.
+    - Prior README dependency section overstated additional dependencies.
+
+Top-Level Documentation Files
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Prior `README.txt`
+    Status before rewrite: Partially conforming.
+    Mismatches found:
+    - Dependency section was inaccurate.
+    - Main-window and settings-window capabilities were under-described.
+    - Did not explicitly enumerate current config keys present in code.
+    - Mentioned architecture accurately at a broad level, but not with the
+      granularity needed for code-to-doc traceability.
+
+Prior `FILE_LOG.txt`
+    Status before rewrite: Partially conforming.
+    Mismatches found:
+    - It covered only major files, not the whole repo.
+    - It omitted package marker files, documentation files, test files, and the
+      exact role of `requirements.txt`.
+    - Interaction flow existed only implicitly.
+
+Prior `DOCUMENTATION_CHANGE_LOG.txt`
+    Status before rewrite: Insufficient as an audit artifact.
+    Mismatches found:
+    - Reflected a revision pass, not a real file-by-file conformance audit.
+    - Did not record specific confirmed code/doc mismatches.
+
+Controller Package
+~~~~~~~~~~~~~~~~~~
+`controllers/__init__.py`
+    Status: Conforms.
+    Findings:
+    - Package marker/doc role only. No executable behavior to validate beyond
+      package intent.
+
+`controllers/chat_controller.py`
+    Status: Conforms and is heavily documented.
+    Confirmed behavior from code and tests:
+    - owns active session state
+    - owns a single active GenerationJob slot
+    - freezes request/session/config state at send time
+    - blocks state-changing actions during streaming
+    - routes streamed chunks to the view
+    - persists replies/errors to the session identified by the job, not merely
+      the currently selected session
+    - supports model refresh, session creation/load/delete/rename, settings
+      save, SearXNG connectivity test, Ollama connectivity test, and unload path
+    Notes:
+    - This file is the main behavior coordinator and the repo docs now state
+      that more explicitly.
+
+Model Package
+~~~~~~~~~~~~~
+`models/__init__.py`
+    Status: Conforms.
+    Findings:
+    - Package role doc only.
+
+`models/chat_message.py`
+    Status: Conforms.
+    Findings:
+    - Dataclass/serialization role matches the code.
+    - Includes optional thinking field, which repo-level docs now mention.
+
+`models/conversation_session.py`
+    Status: Conforms.
+    Findings:
+    - Dataclass/serialization role matches the code.
+
+`models/generation_job.py`
+    Status: Conforms.
+    Findings:
+    - File really is the frozen request snapshot model central to the race fix.
+    - Repo docs were expanded to explain why it matters architecturally.
+
+Service Package
+~~~~~~~~~~~~~~~
+`services/__init__.py`
+    Status: Conforms.
+    Findings:
+    - Package role doc only.
+
+`services/config_service.py`
+    Status: Conforms.
+    Confirmed behavior:
+    - creates config file when missing
+    - normalizes invalid values
+    - atomically saves config
+    - exposes base URL helper
+    Documentation update made:
+    - top-level docs now list the actual current config keys.
+
+`services/session_service.py`
+    Status: Conforms.
+    Confirmed behavior:
+    - creates session objects
+    - atomic saves
+    - duplicate cleanup by session ID
+    - list/load/delete flow
+    Documentation update made:
+    - top-level docs now describe filename format and duplicate cleanup.
+
+`services/search_service.py`
+    Status: Conforms.
+    Confirmed behavior:
+    - base URL normalization/repair
+    - result normalization
+    - connectivity testing
+    Documentation update made:
+    - repo docs now describe it as a SearXNG client rather than only a generic
+      search helper.
+
+`services/web_fetch_service.py`
+    Status: Conforms.
+    Confirmed behavior:
+    - fetches a page
+    - extracts readable title/body text
+    Documentation update made:
+    - no major mismatch, only clarified scope.
+
+`services/ollama_client.py`
+    Status: Conforms, but top-level docs needed more precision.
+    Confirmed behavior from code and tests:
+    - streams chat
+    - lists models
+    - tests connectivity
+    - unloads a model
+    - exposes tool schemas when web search is enabled
+    - executes local search and fetch tools
+    - injects post-tool grounding
+    - retries via forced-search fallback in some current-information cases
+    - computes final throughput metrics from stream metadata
+    Mismatches in prior repo docs:
+    - fallback logic was not described clearly
+    - dependency wording implied `requests`, which is false
+    Documentation update made:
+    - README and FILE_LOG now describe the actual client behavior.
+
+`services/gpu_monitor_service.py`
+    Status: Conforms.
+    Confirmed behavior from code and tests:
+    - prefers `amd-smi`
+    - falls back to `rocm-smi`
+    - parses multiple output shapes
+    - computes VRAM% when needed
+    - returns normalized snapshot dictionary
+    Documentation update made:
+    - repo docs now call out the live GPU/VRAM readout more explicitly.
+
+UI Package
+~~~~~~~~~~
+`ui/__init__.py`
+    Status: Conforms.
+    Findings:
+    - Package role doc only.
+
+`ui/main_window.py`
+    Status: Conforms, but repo docs previously under-described it.
+    Confirmed behavior from code:
+    - model dropdown
+    - settings button
+    - session list with new/rename/delete/refresh
+    - transcript
+    - thinking panel
+    - send input area
+    - status bar
+    - GPU%, VRAM%, and Tok/s labels
+    - background GPU polling
+    - Ctrl+Enter send shortcut
+    Documentation update made:
+    - README now enumerates the visible features explicitly.
+
+`ui/settings_window.py`
+    Status: Conforms, but repo docs previously under-described it.
+    Confirmed behavior from code:
+    - edits Ollama host/port/timeout/model
+    - edits thinking and system prompt settings
+    - edits SearXNG controls
+    - tests Ollama and SearXNG connectivity
+    - refreshes model list
+    - routes VRAM flush to unload path
+    Documentation update made:
+    - README now lists the actual fields and controls present.
+
+Utility Package
+~~~~~~~~~~~~~~~
+`utils/__init__.py`
+    Status: Conforms.
+    Findings:
+    - Package role doc only.
+
+`utils/threading_helpers.py`
+    Status: Conforms.
+    Findings:
+    - Tiny daemon-thread helper exactly as documented.
+
+Test Files
+~~~~~~~~~~
+`tests_web_search_integration.py`
+    Status: Conforms as validation support.
+    Findings:
+    - Confirms search normalization, fetch extraction, tool guidance, post-cutoff
+      grounding, and forced-search paths.
+    Note:
+    - Several test methods do not have method-level docstrings, but names are
+      descriptive and this does not create a user-facing documentation mismatch.
+
+`tests_test_generation_job_flow.py`
+    Status: Conforms as validation support.
+    Findings:
+    - Confirms session binding, model snapshot correctness, unload routing,
+      config normalization behavior, UI shutdown safety, GPU parsing, and final
+      throughput metric behavior.
+
+Documentation Rewrites Performed
+--------------------------------
+1. Rewrote `README.txt` to reflect confirmed code behavior rather than inferred
+   architecture summaries.
+2. Rewrote `FILE_LOG.txt` into a repository-wide file-role map.
+3. Replaced the old high-level change log with a more exact change record.
+4. Added this audit artifact so the documentation set now contains the actual
+   conformance review trail.
+
+Confidence Statement
+--------------------
+The rewritten documentation is materially more defensible than the previous
+version because it was produced after a file-by-file review and test run.
+That said, the audit scope is still limited to:
+- the code present in this ZIP
+- the bundled tests
+- behavior inferable from direct source inspection
+
+It does not substitute for live end-to-end validation against the user's exact
+Ollama instance, SearXNG instance, or GPU toolchain on their own machine.
+
+Dedicated Search-Reranker Addendum
+---------------------------------
+This package was later revised again to add a dedicated reranker stage between
+SearXNG search and the main answer model.
+
+Changes confirmed from the current code:
+- `services/reranker_service.py` was added as a new service-layer file.
+- `services/ollama_client.py` now applies reranking to `search_web` results
+  when the saved config enables it and a reranker model name is present.
+- `services/config_service.py` now persists two new config fields:
+  `enable_search_reranker` and `search_reranker_model`.
+- `models/generation_job.py` now freezes those reranker settings into each
+  request snapshot.
+- `controllers/chat_controller.py` now copies reranker settings into the
+  GenerationJob created at send time.
+- `ui/settings_window.py` now exposes user-editable controls for enabling the
+  dedicated reranker and selecting the reranker model name.
+- The bundled unit tests were expanded to validate reranker ordering behavior,
+  reranker-failure fallback behavior, and reranker-config propagation.
+
+Validation update:
+- Command run: `python -m unittest -v`
+- Observed result: 47 tests passed.
+
+
+Adversarial Review Reconciliation
+---------------------------------
+After this audit file was originally written, an external adversarial review
+identified several real defects that the prior pass had not caught, most notably
+the assistant/tool message-ordering issue in `services/ollama_client.py`. This
+revision corrects those defects and updates the repository documentation so this
+audit artifact is no longer claiming a cleaner state than the code actually had
+at that time.
+
+
+Live Pipeline Test Audit Note
+-----------------------------
+A new opt-in live integration test was added to `tests_web_search_integration.py`.
+This test does not replace the existing mocked regression tests. Its role is
+to make real SearXNG search behavior and real fetch outcomes observable through
+trace logging when the reviewer explicitly enables it. That makes the live
+search/fetch path inspectable without making the default offline test suite
+fragile.
