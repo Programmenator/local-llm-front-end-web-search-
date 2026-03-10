@@ -1,0 +1,311 @@
+2026-03-10
+----------
+Fix: poor search results from conversational queries and weak reranker prompt:
+- Root cause 1 — query quality: the tool schema described the query parameter
+  only as "The search query to run." with no format guidance. Models passed
+  natural-language conversation ("Give me the latest on Iran's conflict") directly
+  to SearXNG, which produces significantly worse results than keyword form
+  ("Iran conflict latest 2026"). Fixed by updating the query property description
+  with a concrete good/bad example instructing keyword-style queries.
+- Root cause 2 — grounding message: added keyword-query instruction to the web
+  tool grounding system message so models are reminded to use concise keywords
+  even when the tool schema alone is ignored.
+- Root cause 3 — fallback query: the fallback search path (triggered when the
+  model ignores the tool and returns an off-topic response) passed the raw user
+  message verbatim as the SearXNG query. Added _extract_search_query() helper
+  to services/ollama_client.py which strips common conversational preambles
+  ("Give me the latest on", "search for", "What's the latest on", etc.) before
+  the query reaches SearXNG.
+- Root cause 4 — reranker system prompt: the reranker system message only said
+  "Return JSON only in the form {...}" without explicitly requiring ALL candidate
+  IDs to be included. Local models often returned a partial list of top-N IDs.
+  The remaining results were then appended unordered after those N, meaning the
+  reranker only controlled the very top of the list, not the full ranking. Fixed
+  by adding "You MUST include every candidate ID in your output — do not drop any"
+  and a more explicit JSON-only instruction.
+- Added OllamaClientQueryCleaningTests (8 tests) covering: passthrough of clean
+  keywords, stripping of "Give me the latest on/about", "search for", "What's
+  the latest on", trailing punctuation removal, short-result fallback, and empty
+  input.
+- Updated two existing fallback tests to assert on cleaned query output.
+- Total test count: 33, all passing.
+
+2026-03-10
+----------
+Fix: thinking-mode model responds to grounding system messages instead of user query:
+- Symptom: asking "Give me the latest on Iran's conflict" produced a generic
+  greeting ("Hello! I'm here to help...") instead of a grounded news answer.
+  The thought-tracker showed the model reasoning correctly but the answer was wrong.
+- Root cause: all three grounding system messages were written in third-person
+  application-description language ("Web search tools are available in this
+  application. The current date is March 10, 2026..."). Thinking-mode models
+  (e.g. qwen3 with think=True) read these as a user-provided role-play scenario
+  and responded to the scenario setup rather than the user's actual question.
+  The fallback path used the same wrong framing and additionally told the model
+  "the previous draft claimed no internet access" even when no such claim was
+  made (the model simply ignored the query), which further confused the model.
+- Fix 1: Rewrote the web tool grounding message (_build_chat_messages) in
+  first-person imperative: "You have access to web search tools. Today's date
+  is March 10, 2026. For any question about current events... call search_web
+  with max_results=N before answering." Models treat first-person imperative
+  system messages as internal rules rather than as scenarios to respond to.
+- Fix 2: Rewrote the post-tool grounding message (_build_post_tool_grounding_message)
+  in the same first-person imperative style.
+- Fix 3: Split the fallback notice message in _maybe_force_web_search_fallback
+  into two variants: (a) for when the model explicitly claimed no web access,
+  uses corrective framing; (b) for when the model simply failed to search for
+  a query that clearly requires current information, uses direct "here are the
+  results, answer the question" framing without implying a false prior claim.
+- Updated tests: updated three stale string assertions to match new message
+  wording while preserving the behavioral intent of each check.
+- Total test count: 25, all passing.
+
+2026-03-10
+----------
+Fix: post-tool grounding message inserted before tool results, breaking citations:
+- Root cause: in _chat_with_optional_tools (services/ollama_client.py), the
+  post-tool grounding system message was appended to augmented_messages
+  immediately after the assistant tool-call message and BEFORE the tool result
+  messages. The Ollama tool-use protocol requires the sequence:
+    [assistant]  tool_calls=[search_web]
+    [tool]       result JSON
+    [system]     post-tool grounding
+  With a system message between the assistant and tool messages, Ollama-served
+  models broke the assistant→tool pairing and ignored the tool result. The model
+  never saw the source_id values in the results, so it produced no [S1]-style
+  citations. _build_validated_sources_from_answer found nothing in the answer
+  text, sources_used was always empty, and the validated sources panel stayed
+  blank.
+- Fix: moved augmented_messages.append(_build_post_tool_grounding_message()) to
+  after the for-loop that appends all tool result messages, so the final message
+  sequence is [assistant, tool, tool, ..., system(grounding)].
+- Added test_post_tool_grounding_message_appears_after_tool_result_not_before in
+  tests_web_search_integration.py which captures the exact message list sent to
+  the streaming call and asserts assistant_idx < tool_idx < grounding_idx.
+- Total test count: 25, all passing.
+
+2026-03-10
+----------
+Root cause fix for model only requesting ~5 search results despite higher config:
+- Root cause: the search_web tool schema exposed max_results as a bare integer
+  with no default and no description hint. The model had no signal about the
+  user-configured ceiling and freely chose its own small number (typically 3-5)
+  for every tool call regardless of the web_max_results setting.
+- Fixed _build_web_tools_schema in services/ollama_client.py to inject the
+  configured web_max_results value as both the JSON Schema default and as an
+  explicit value in the property description (e.g. "Use 100 unless the user
+  explicitly asked for a different amount.").
+- Fixed _build_chat_messages in services/ollama_client.py to accept a
+  web_max_results parameter and embed it in the web tools grounding system
+  message ("Use search_web first with max_results=100 ...").
+- Wired web_max_results through from config to _build_chat_messages at the
+  chat_stream call site so the configured value reaches both the schema and
+  the grounding message automatically.
+- Updated tests: added web_max_results=N to the existing grounding message
+  test call, added test_grounding_message_embeds_configured_max_results, and
+  added test_tool_schema_max_results_default_matches_configured_value.
+- Total test count: 24, all passing.
+
+2026-03-10
+----------
+Test suite audit, reranker test fix, and new regression coverage:
+- Discovered OllamaClientRerankerTests was placed after the
+  if __name__ == '__main__': unittest.main() guard in
+  tests_web_search_integration.py. unittest.main() calls sys.exit() so the
+  class was never parsed and the reranker tests were silently unreachable on
+  every direct run. Moved the class above the guard to restore execution.
+- Added SearchServiceIdOffsetTests covering: id_offset=0 baseline produces
+  S1..SN; non-zero offset shifts IDs correctly; two sequential searches with
+  accumulated offsets produce disjoint ID sets.
+- Added OllamaClientCatalogAccumulationTests covering: first search populates
+  empty catalog; second search extends without wiping first results (direct
+  regression for source_catalog.clear() bug); citations from both searches
+  resolve correctly in the accumulated catalog after both run.
+- Added OllamaClientFetchCountEnforcementTests covering: fetch_url_content
+  calls beyond web_max_pages are blocked per turn and do not reach
+  _execute_tool_call (regression for the missing fetch_count enforcement).
+- Updated TEST_REPORT.txt to document the audit findings, class relocation,
+  new test classes, and corrected total test count (22, not 14).
+
+2026-03-10
+----------
+Source catalog accumulation fix and multi-search citation correctness:
+- Identified root cause of "only 5 sources used" symptom: source_catalog.clear()
+  in services/ollama_client.py was called on every search_web tool invocation.
+  When a model issued a second search_web call in the same turn, all citations
+  from the first search were removed from the catalog and treated as invalid by
+  the UI validation pass, even though they came from real SearXNG results.
+- Fixed services/search_service.py to accept an id_offset parameter in search()
+  and _normalize_result(). The offset shifts the starting source ID number
+  (e.g. S1..S10 for the first search, S11..S20 for the second) so multiple
+  searches within one turn produce globally unique, non-colliding IDs.
+- Fixed services/ollama_client.py _execute_tool_call to pass the current catalog
+  length as id_offset to each search_web call, then accumulate new results into
+  the catalog with extend() instead of wiping it with clear(). Citations from
+  all searches in a turn now resolve correctly at validation time.
+- Updated module-level docstrings in search_service.py and ollama_client.py to
+  document the accumulation model and why id_offset exists.
+- Updated _normalize_result, search(), and _execute_tool_call inline docstrings
+  to explain the offset scheme for future maintainers.
+
+2026-03-10
+----------
+Search result count pipeline fix (bottleneck removal pass):
+- Removed hard min(20) clamp in services/search_service.py that silently ignored
+  the UI-configured max results value above 20.
+- Raised services/config_service.py web_max_results ceiling from 20 to 200 so
+  configured values of 50 or 100 pass through the validation layer.
+- Raised services/config_service.py web_max_pages ceiling from 5 to 50 so
+  page-fetch limits above 5 pass through config validation.
+- Added fetch_count enforcement in services/ollama_client.py
+  _chat_with_optional_tools so the web_max_pages config value is actually
+  respected as a per-turn limit on fetch_url_content tool calls. Previously
+  web_max_pages was stored in GenerationJob and passed through request options
+  but was never checked against the number of fetch calls made by the model.
+
+
+- Updated models/chat_message.py so assistant messages can persist validated
+  source metadata alongside visible content and thinking text.
+- Updated services/search_service.py to stamp normalized SearXNG results with
+  stable source IDs such as S1 and validation metadata.
+- Updated services/ollama_client.py to instruct the model to cite factual
+  claims with the provided source IDs, validate cited IDs against real SearXNG
+  results, and generate best-effort text-fragment URLs for source review.
+- Updated controllers/chat_controller.py to carry validated source metadata from
+  the Ollama client into persisted assistant messages and UI finalization.
+- Updated ui/main_window.py to add a validated sources pane under the thinking
+  box, render clickable in-text citations, and show ignored invalid citation
+  IDs in the source-status text.
+- Updated tests_web_search_integration.py to verify source-ID stamping,
+  validated-source extraction, and invalid-citation rejection.
+- Updated README.txt, FILE_LOG.txt, and TEST_REPORT.txt to document the new
+  grounded-citation behavior and current verification scope.
+
+2026-03-10
+----------
+Temporal grounding and source-precedence revision:
+- Updated services/ollama_client.py web-tool guidance so the runtime explicitly
+  states that March 10, 2026 is the present application context.
+- Updated post-search grounding instructions so retrieved web evidence is the
+  primary source of truth for current or time-sensitive facts.
+- Added explicit conflict-handling guidance so the model only reports conflict
+  when retrieved sources disagree with each other rather than when internal
+  knowledge differs from current web results.
+- Updated fallback search instructions so defensive search retries also carry
+  the same date and source-precedence rules.
+- Expanded tests_web_search_integration.py assertions to cover the stronger
+  temporal-grounding and source-priority instructions.
+- Updated TEST_REPORT.txt and README.txt to record the actual verification
+  state available in this container: source compilation plus the web-search
+  integration suite, with full PyQt6-dependent tests still requiring PyQt6 to
+  be installed in the runtime environment.
+
+DOCUMENTATION CHANGE LOG
+========================
+
+2026-03-10
+----------
+Documentation sweep and compliance pass:
+- Reviewed package documentation against the current PyQt6 codebase.
+- Corrected stale or misleading wording so the text documents describe the
+  present implementation rather than older intermediate states.
+- Filled remaining function/method docstring gaps, including helper classes and
+  test/support code that still lacked traceability coverage.
+- Refreshed README.txt, FILE_LOG.txt, and TEST_REPORT.txt so they explicitly
+  describe the current compliance state and current verification result.
+- Prepared the package for a cleaner delivery ZIP by excluding compiled cache
+  folders from the final archive.
+
+2026-03-10
+----------
+Additional PyQt6 review and stabilization pass:
+- Updated ui/main_window.py prompt input to use a dedicated PyQt editor class
+  that captures Ctrl+Enter directly inside the prompt box. This fixes the
+  advertised send shortcut when focus is inside the QTextEdit itself.
+- Updated ui/main_window.py model choice refresh behavior so a saved model stays
+  visible and selected even when the latest Ollama model refresh does not
+  include it.
+- Updated ui/settings_window.py model refresh behavior so an unavailable saved
+  model is preserved in the settings selectors instead of being silently
+  cleared.
+- Expanded tests_ui_and_service_smoke.py to cover Ctrl+Enter prompt sending and
+  saved-model preservation during empty/unavailable model refresh scenarios.
+- Updated README.txt, FILE_LOG.txt, and TEST_REPORT.txt to document the new
+  issues found and the revised 37-test verification scope.
+
+2026-03-10
+----------
+Full verification and bug-fix pass:
+- Added broader automated smoke coverage in tests_ui_and_service_smoke.py for
+  the PyQt6 UI layer, data models, session persistence service, config service,
+  and threading helper.
+- Fixed ui/main_window.py final throughput updates so they work for both the
+  visible PyQt labels and the legacy compatibility variable path used by older
+  tests/helpers.
+- Added lightweight compatibility proxy objects to ui/main_window.py for the
+  former Tkinter-style status/model/session/metric variables so the PyQt6
+  rewrite remains behaviorally compatible with older expectations.
+- Reworked safe_ui_call() to use a Qt signal bridge for safer background-thread
+  delivery onto the UI thread.
+- Corrected ui/__init__.py package documentation to describe PyQt6 rather than
+  Tkinter.
+- Updated TEST_REPORT.txt to document the expanded 36-test verification pass and
+  the exact bugs corrected during that pass.
+
+2026-03-10
+----------
+Front-page metrics placement update:
+- Updated ui/main_window.py to add a bottom-left footer metrics strip near the
+  prompt workflow.
+- Mirrored live GPU utilization percentage into the new lower readout area.
+- Mirrored VRAM percentage and token-per-second values into the same lower
+  footer strip so the runtime metrics stay grouped together.
+- Updated README.txt, FILE_LOG.txt, and TEST_REPORT.txt to document the front-
+  page metrics placement change and current verification scope.
+
+2026-03-10
+----------
+Repair pass after diff review:
+- Restored missing PyQt6 MainWindow methods required by ChatController:
+  begin_assistant_stream(), finalize_assistant_stream(...), and
+  highlight_session(session_id).
+- Restored live/final throughput update helpers so streaming performance labels
+  behave like the original Tkinter implementation.
+- Updated safe_ui_call() so UI callbacks are skipped after shutdown begins.
+- Updated README.txt, FILE_LOG.txt, and TEST_REPORT.txt to document the repair
+  pass and the current verification scope.
+
+2026-03-10
+----------
+Initial PyQt6 migration documentation update:
+- Replaced the Tkinter GUI bootstrap in app.py with a PyQt6 QApplication-based
+  startup path.
+- Rewrote ui/main_window.py as a PyQt6 main window.
+- Rewrote ui/settings_window.py as a PyQt6 settings dialog.
+- Updated requirements.txt to include PyQt6.
+- Rewrote README.txt to describe the new PyQt6 layout, architecture, and
+  manual verification targets.
+- Rewrote FILE_LOG.txt so the package-level traceability log matches the new
+  GUI structure.
+- Preserved top-of-file purpose documentation and function docstrings in the
+  revised application files.
+
+2026-03-10 - GPU metrics contract repair
+- Corrected the PyQt6 GPU footer/readout integration so it no longer drops valid GPU and VRAM values when the controller receives canonical service keys.
+- Updated `controllers/chat_controller.py` documentation to describe the compatibility normalization step.
+- Updated `ui/main_window.py` documentation to describe the accepted metric key styles during UI refresh.
+- Added a regression test covering canonical-to-legacy GPU metric key normalization.
+
+2026-03-10 - VRAM flush verification and repair
+- Updated `services/ollama_client.py` documentation to describe the new three-step unload strategy: `ollama stop`, `/api/generate keep_alive=0`, then `/api/chat keep_alive=0`.
+- Updated `controllers/chat_controller.py` documentation to describe the immediate post-unload GPU metrics refresh request sent to the attached main window.
+- Updated `ui/main_window.py` documentation to describe the explicit immediate GPU metrics refresh helper used after flush actions.
+- Updated `ui/settings_window.py` documentation to describe the post-flush model refresh and the stale-readout issue it fixes.
+- Updated package text documentation so the root cause and corrected behavior are traceable from the README and test report.
+
+
+2026-03-10 - Reranker stage update
+- Added persistent reranker_model config support.
+- Added main-window reranker selector beside the primary model selector.
+- Added optional Ollama rerank pass for SearXNG results before they are passed to the answering model.
+- Updated inline documentation to trace the new retrieval-stage flow.

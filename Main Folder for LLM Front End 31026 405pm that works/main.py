@@ -1,0 +1,27 @@
+"""
+main.py
+
+Purpose:
+    Entry point for the local LLM desktop interface.
+
+What this file does:
+    - Starts the PyQt6 application.
+    - Creates the main application object.
+    - Hands control to the Qt event loop.
+
+How this file fits into the system:
+    This file remains intentionally small so startup concerns stay separate from
+    UI layout, controller logic, persistence, and Ollama communication.
+"""
+
+from app import LocalLLMFrontendApp
+
+
+def main() -> None:
+    """Create the application and start the desktop event loop."""
+    app = LocalLLMFrontendApp()
+    app.run()
+
+
+if __name__ == "__main__":
+    main()

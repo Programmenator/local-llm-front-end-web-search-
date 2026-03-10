@@ -1,0 +1,140 @@
+TEST REPORT
+===========
+
+Date
+----
+- 2026-03-10
+
+Verification scope in this package state
+----------------------------------------
+- Re-checked the source tree after the VRAM flush investigation and repair.
+- Confirmed all Python files compile with py_compile.
+- Re-ran a targeted regression suite for the repaired VRAM flush path.
+- The full PyQt6-dependent unittest run could not be completed in this
+  container because the PyQt6 package is not installed in the verification
+  environment.
+
+Automated result
+----------------
+- py_compile: passed for all Python files
+- tests_vram_flush_regression: 3 tests executed, 3 tests passed
+- full PyQt6-dependent suite: not runnable in this container due to missing
+  PyQt6 dependency
+
+What the automated coverage includes
+------------------------------------
+- controller-side unload routing for the settings VRAM flush action
+- immediate post-unload GPU metrics refresh requests from the controller
+- direct `ollama stop` CLI unload helper success/failure normalization
+- source-tree compilation coverage for all Python modules
+
+Issues addressed by this revision
+---------------------------------
+1. The VRAM flush feature could look broken for two separate reasons: the unload
+   path itself was too brittle because it relied on only one API method, and
+   the PyQt6 UI did not force a fast post-action refresh so stale readouts could
+   remain visible even after a successful unload.
+2. The Ollama client now uses a more resilient unload sequence: `ollama stop`,
+   then `/api/generate keep_alive=0`, then `/api/chat keep_alive=0`.
+3. The controller now requests an immediate GPU metrics refresh after a
+   successful unload so the main window can show the post-flush state quickly.
+4. The settings dialog now refreshes the model list after a successful flush so
+   the visible model state catches up faster.
+5. Package text documentation and function documentation were updated so the new
+   unload strategy and UI refresh behavior are traceable.
+
+Manual follow-up required on the target machine
+-----------------------------------------------
+- Install the package requirements, including PyQt6.
+- Re-run the full headless unittest suite with QT_QPA_PLATFORM=offscreen.
+- Do one live application check on the target Linux desktop with the intended
+  Ollama, ROCm, and SearXNG environment.
+- Verify that a Flush GPU VRAM action changes the footer readouts immediately
+  when the selected model is the process holding the memory.
+- If VRAM still remains allocated after a successful unload, verify whether a
+  second model or another ROCm process is still holding GPU memory.
+
+
+GPU metrics verification update (2026-03-10):
+- Reproduced the footer/readout bug by tracing the metric contract: `GPUMonitorService` returned `gpu_percent` / `vram_percent`, while `MainWindow._refresh_gpu_metrics_background()` only read `gpu_percent_text` / `vram_percent_text`.
+- Implemented a controller-side normalization layer and a UI-side fallback so valid metrics no longer collapse to `--`.
+- Verification completed in this environment:
+  - `py_compile` passed for all Python files
+  - direct controller normalization check passed for canonical GPU metric fields
+- Limitation: full PyQt6 runtime tests could not be executed in this container because PyQt6 is not installed here.
+
+
+External reference note (2026-03-10):
+- Current official Ollama documentation states that `keep_alive=0` on `/api/generate` or `/api/chat` unloads the model immediately after the request, and the current FAQ also presents `ollama stop <model>` as the direct unload command. This repair pass aligns the local program with that documented behavior.
+
+
+Message ordering fix — post-tool grounding must follow tool results (2026-03-10):
+- Root cause: post-tool grounding system message was inserted between the
+  assistant tool-call message and the tool result messages, breaking the
+  assistant→tool pairing that Ollama models require to process tool results.
+  Effect: model ignored tool result, produced no [S1] citations, sources panel
+  was always empty.
+- Fix: post-tool grounding is now appended after all tool result messages.
+- Added test_post_tool_grounding_message_appears_after_tool_result_not_before
+  asserting assistant_idx < tool_idx < grounding_idx in the final message list.
+- Total test count: 25, all passing.
+
+Model max_results tool call fix (2026-03-10):
+- Root cause identified for "only 5 results" symptom: the search_web tool
+  schema exposed max_results as a bare integer with no default and no hint.
+  The model was freely choosing a small number (typically 3-5) for every tool
+  call, making the web_max_results config setting invisible to the model.
+- Fixed _build_web_tools_schema to inject configured web_max_results as the
+  JSON Schema default and in the property description.
+- Fixed _build_chat_messages to embed configured web_max_results in the web
+  tools grounding system message.
+- Added 2 new tests covering schema default and grounding message injection.
+- Total test count: 24, all passing.
+
+Search pipeline and source catalog fix verification (2026-03-10)
+-----------------------------------------------------------------
+Two separate fix rounds were applied and verified.
+
+Round 1 — Search result pipeline bottleneck removal:
+- Removed hard min(20) clamp in services/search_service.py.
+- Raised web_max_results ceiling in services/config_service.py from 20 to 200.
+- Raised web_max_pages ceiling in services/config_service.py from 5 to 50.
+- Added fetch_count enforcement in services/ollama_client.py so web_max_pages
+  is checked against actual fetch_url_content calls per turn.
+- Verified config_service normalization passes 50 and 100 through without
+  truncation and still enforces the new 200/50 ceilings.
+- All 14 web search integration tests passed after this round.
+
+Round 2 — Source catalog accumulation fix:
+- Root cause: source_catalog.clear() in services/ollama_client.py wiped all
+  citations from earlier search_web calls in the same turn. Citations from the
+  first search were marked invalid after a second search ran, causing the UI
+  sources panel to silently drop them.
+- Secondary cause: each search call assigned source IDs starting at S1, so two
+  searches produced colliding IDs. The clear() was the only guard against a
+  wrong result being shown for a reused ID.
+- Fix: search_service.py now accepts id_offset so sequential searches produce
+  globally unique IDs (S1..S10, then S11..S20). ollama_client.py passes
+  len(source_catalog) as id_offset and accumulates with extend() instead of
+  clear()+extend().
+
+Test suite audit and expansion (2026-03-10):
+- Discovered OllamaClientRerankerTests was defined after the
+  if __name__ == '__main__': unittest.main() guard. Because unittest.main()
+  calls sys.exit(), the class was never parsed and its tests were silently
+  skipped on every direct run of the file. The class was moved above the guard.
+- Added SearchServiceIdOffsetTests (3 tests): id_offset=0 baseline, offset
+  shift, and two-search disjoint ID set verification.
+- Added OllamaClientCatalogAccumulationTests (3 tests): first-search population,
+  second-search accumulation (direct regression for the clear() bug), and
+  cross-search citation validity after both searches complete.
+- Added OllamaClientFetchCountEnforcementTests (1 test): verifies that
+  fetch_url_content calls beyond web_max_pages are blocked per turn and do not
+  reach _execute_tool_call.
+- All 22 tests pass. Previous reported count of 14 was understated because the
+  reranker test class was unreachable.
+
+Reranker update verification
+
+- py_compile passed for all Python files after the reranker-stage change.
+- Added targeted regression checks for reranker config persistence and validated rerank ordering.

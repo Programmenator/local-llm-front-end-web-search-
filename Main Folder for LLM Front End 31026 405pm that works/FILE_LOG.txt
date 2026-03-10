@@ -1,0 +1,205 @@
+FILE LOG
+========
+
+Package purpose
+---------------
+This package contains the PyQt6 frontend revision of the local LLM interface.
+It preserves the existing controller/service architecture while replacing the
+Tkinter GUI layer with a PyQt6 desktop interface that is easier to extend.
+
+Documentation sweep scope
+-------------------------
+This pass focused on documentation quality and compliance rather than a major
+behavioral redesign. The sweep did four things:
+- checked package-level documentation for stale or misleading statements
+- checked function/method documentation coverage against the current source tree
+- corrected remaining gaps in docstrings, especially in helper/support code
+- refreshed the package text documents so they match the current program state
+
+Source files and how they fit together
+--------------------------------------
+main.py
+- Entry-point launcher.
+- Starts the application object and hands control to the Qt event loop.
+
+app.py
+- Composition root.
+- Creates QApplication, services, controller, and the PyQt6 main window.
+- Defines how the major runtime pieces are assembled.
+
+controllers/__init__.py
+- Package marker and package-level purpose note for controller code.
+
+controllers/chat_controller.py
+- Main orchestration layer.
+- Connects UI actions to deterministic services and durable session state.
+- Owns session switching, message submission, streamed reply coordination,
+  persistence, status updates, and model-refresh requests.
+- After a successful model unload, it now also requests an immediate GPU
+  metrics refresh from the attached main window so stale footer values do not
+  make a real flush look broken.
+
+models/__init__.py
+- Package marker and package-level purpose note for model objects.
+
+models/chat_message.py
+- Data structure for one message in a conversation.
+- Used by session persistence, controller logic, and UI rendering.
+- Now also carries validated source metadata for grounded citations and the
+  sources pane.
+
+models/conversation_session.py
+- Data structure for one saved conversation session.
+- Holds title, model name, timestamps, and message history.
+
+models/generation_job.py
+- Frozen request snapshot for one generation run.
+- Protects in-flight work from later UI/config changes.
+
+services/__init__.py
+- Package marker and package-level purpose note for service code.
+
+services/config_service.py
+- Reads, normalizes, merges, and saves persistent settings.
+- Supplies runtime config used by the controller and service layer.
+- web_max_results ceiling raised from 20 to 200 so values up to 200 pass
+  through config normalization without silent truncation.
+- web_max_pages ceiling raised from 5 to 50 for the same reason.
+
+services/gpu_monitor_service.py
+- Collects and normalizes live GPU/VRAM metrics.
+- Parses AMD/ROCm command output into UI-friendly fields.
+
+services/ollama_client.py
+- Handles Ollama chat/model/unload requests.
+- Manages request options, stream consumption, optional tool use, runtime
+  metric extraction, citation/source validation, and web-grounding precedence
+  instructions for the controller.
+- The unload path now prefers `ollama stop` and falls back to API-based
+  `keep_alive=0` requests so VRAM flush is more reliable across environments.
+- fetch_url_content tool calls are now counted per turn and capped at the
+  configured web_max_pages value so the page-fetch limit is actually enforced
+  rather than carried in the request snapshot but never checked.
+- Source catalog accumulation: each search_web call now passes the current
+  catalog length as an id_offset so subsequent searches produce non-colliding
+  source IDs (S11..S20 after S1..S10). The catalog is accumulated with
+  extend() rather than replaced with clear()+extend(), so citations from any
+  search call within the turn remain valid at UI validation time.
+
+services/search_service.py
+- Handles SearXNG search requests and connection tests.
+- Normalizes instance URLs and returned result shapes.
+- Stamps returned results with stable source IDs used for validated citations.
+- Removed hard min(20) result clamp so the UI-configured max results value is
+  honored without a silent ceiling.
+- Added id_offset parameter to search() and _normalize_result() so callers
+  can request globally unique source IDs across multiple search calls within
+  one turn (e.g. first call: S1..S10, second call with offset=10: S11..S20).
+
+services/session_service.py
+- Creates, saves, lists, loads, and deletes session files.
+- Bridges durable session storage and controller state.
+
+services/web_fetch_service.py
+- Fetches a page and extracts readable text/body content.
+- Supports web-grounded workflows after search.
+
+ui/__init__.py
+- Package marker and package-level purpose note for the PyQt6 UI layer.
+
+ui/main_window.py
+- Main desktop window.
+- Builds the interactive layout, renders transcript/thinking output, mirrors
+  runtime metrics, renders clickable validated citations, shows the sources
+  pane, and exposes compatibility hooks expected by the controller.
+- Now includes an explicit immediate GPU metrics refresh helper used after a
+  successful VRAM flush so the footer updates without waiting for the next poll.
+
+ui/settings_window.py
+- Settings dialog.
+- Handles config editing, connection tests, model refresh, and flush actions.
+- After a successful flush action, it now also refreshes the model list so the
+  visible state catches up to the unload request faster.
+
+utils/__init__.py
+- Package marker and package-level purpose note for utility helpers.
+
+utils/threading_helpers.py
+- Small daemon-thread launcher used for background work.
+
+Test files and why they matter
+------------------------------
+tests_test_generation_job_flow.py
+- Regression coverage for controller generation flow, GPU parsing, and several
+  UI compatibility expectations that protect the original workflow behavior.
+
+tests_web_search_integration.py
+- Integration-style coverage for web-search configuration, URL normalization,
+  tool-calling behavior, and grounding-related client logic.
+- OllamaClientRerankerTests was previously placed after the
+  if __name__ == '__main__': unittest.main() guard and was silently unreachable.
+  It has been moved above the guard so it executes normally.
+- Added SearchServiceIdOffsetTests, OllamaClientCatalogAccumulationTests, and
+  OllamaClientFetchCountEnforcementTests to cover the id_offset scheme, catalog
+  accumulation across multiple searches, and fetch_count enforcement.
+- Total: 22 tests, all passing.
+
+tests_ui_and_service_smoke.py
+- Smoke coverage for the PyQt6 windows, persistence services, model objects,
+  and threading helper.
+
+Text documentation files
+------------------------
+README.txt
+- Project-level orientation document.
+- Explains what the package is, how it is arranged, and what was verified.
+
+FILE_LOG.txt
+- This file.
+- Maps each file to its role in the system so the codebase stays navigable.
+
+DOCUMENTATION_CHANGE_LOG.txt
+- Tracks package documentation revisions and what each pass changed.
+
+TEST_REPORT.txt
+- Records the current verification scope, test count, and fixed issues.
+
+Documentation compliance result
+-------------------------------
+After this sweep:
+- module purpose notes are present across the Python source
+- function/method docstrings are present across the Python source
+- stale Tkinter-era wording has been corrected where found
+- temporal-grounding and source-precedence documentation now matches the current web-search runtime behavior
+- package text documentation matches the current PyQt6 implementation state
+
+
+controllers/chat_controller.py
+- Added GPU snapshot key normalization so callers receive both canonical metric names (`gpu_percent`, `vram_percent`) and legacy UI compatibility names (`gpu_percent_text`, `vram_percent_text`).
+
+ui/main_window.py
+- Updated GPU refresh handling to accept either metric naming style before updating the visible labels.
+
+tests_test_generation_job_flow.py
+- Added a regression test verifying that canonical GPU metric fields are mirrored into the older `*_text` keys expected by the PyQt6 refresh path.
+
+
+tests_vram_flush_regression.py
+- Targeted regression coverage for the repaired VRAM flush path.
+- Verifies controller-triggered immediate GPU refresh behavior and the direct CLI unload helper.
+
+
+services/ollama_client.py
+- Added optional reranker stage that reorders validated SearXNG candidates using a second Ollama model.
+
+ui/main_window.py
+- Added reranker selector beside the primary model selector and wired persistence callbacks.
+
+controllers/chat_controller.py
+- Added reranker config update path and propagated reranker selection through model refresh and request snapshot creation.
+
+models/generation_job.py
+- Added reranker_model to the frozen request snapshot.
+
+services/config_service.py
+- Added reranker_model to persistent configuration defaults and normalization.
