@@ -24,3 +24,9 @@ venv/
 # OS files
 .DS_Store
 Thumbs.db
+
+# model artifacts
+models/
+*.gguf
+*.bin
+*.pt
