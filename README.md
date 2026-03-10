@@ -8,4 +8,6 @@ This is a personal project meant for local use, I'm backing it up here though
 
 This is a simple interface to interact with a local llm ollama instance since the current free options available were either (imo) overly complicated for my needs 
 or didn't have some small feature I wanted from them (i.e. a simple token/second rate display, GPU % usage and VRAM % usage or way to flush vram to load in a new llm that you 
-could view and use in clear and transparent way 
+could view and use in clear and transparent way) 
+
+Flush in settings
