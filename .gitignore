@@ -4,3 +4,23 @@ __pycache__/
 venv/
 .venv/
 *.sqlite
+# Python bytecode
+__pycache__/
+*.pyc
+
+# Virtual environments
+venv/
+.venv/
+
+# Environment files
+.env
+
+# Logs
+*.log
+
+# Local databases
+*.sqlite
+
+# OS files
+.DS_Store
+Thumbs.db
